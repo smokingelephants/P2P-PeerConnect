@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minimal Multichat</title>
+    <script src="https://unpkg.com/peerjs@1.2.0/dist/peerjs.min.js"></script>
+</head>
+<body>
+    <h1>Multichat</h1>
+
+    <!-- Login Section -->
+    <div id="login">
+        <label for="username">Enter your username:</label>
+        <input id="username" type="text">
+        <button onclick="login()">Login</button>
+        <p id="loginError" style="color: red;"></p>
+    </div>
+
+    <!-- Chat Section -->
+    <div id="chat" style="display: none;">
+        <h2>Welcome, <span id="currentUser"></span></h2>
+
+        <!-- Connection Section -->
+        <div>
+            <label for="targetUsername">Connect to user:</label>
+            <input id="targetUsername" type="text">
+            <button onclick="connectToPeer()">Connect</button>
+        </div>
+
+        <h3>Connected Users:</h3>
+        <ul id="userList"></ul>
+
+        <!-- Chat Box -->
+        <h3>Chat:</h3>
+        <div id="chatbox" style="border: 1px solid black; height: 200px; overflow-y: scroll; padding: 5px;"></div>
+
+        <!-- Message Input -->
+        <div>
+            <input id="message" type="text" placeholder="Type a message">
+            <button onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+
+    <script>
+        let peer;
+        let connections = {};
+        let chats = [];
+
+        function login() {
+            const username = document.getElementById('username').value;
+            if (!username) {
+                document.getElementById('loginError').textContent = 'Username is required!';
+                return;
+            }
+
+            document.getElementById('loginError').textContent = '';
+            document.getElementById('currentUser').textContent = username;
+            document.getElementById('login').style.display = 'none';
+            document.getElementById('chat').style.display = 'block';
+
+            // Initialize PeerJS
+            peer = new Peer(username);
+
+            peer.on('open', () => console.log('Connected to signaling server'));
+
+            peer.on('connection', conn => {
+                configureConnection(conn);
+                conn.on('open', () => {
+                    connections[conn.peer] = conn;
+                    updateUserList();
+                });
+            });
+        }
+
+        function configureConnection(conn) {
+            conn.on('data', data => {
+                if (data.type === 'chat') {
+                    chats.push(`${data.sender}: ${data.message}`);
+                    updateChatBox();
+                }
+            });
+
+            conn.on('close', () => {
+                delete connections[conn.peer];
+                updateUserList();
+            });
+        }
+
+        function connectToPeer() {
+            const targetUsername = document.getElementById('targetUsername').value;
+            if (!targetUsername || connections[targetUsername]) return;
+
+            const conn = peer.connect(targetUsername);
+            configureConnection(conn);
+            conn.on('open', () => {
+                connections[targetUsername] = conn;
+                updateUserList();
+            });
+        }
+
+        function sendMessage() {
+            const message = document.getElementById('message').value;
+            if (!message) return;
+
+            const sender = peer.id;
+            const chat = { sender, message };
+            chats.push(`${sender}: ${message}`);
+            updateChatBox();
+
+            Object.values(connections).forEach(conn => conn.send({ type: 'chat', sender, message }));
+            document.getElementById('message').value = '';
+        }
+
+        function updateChatBox() {
+            const chatbox = document.getElementById('chatbox');
+            chatbox.innerHTML = chats.map(chat => `<p>${chat}</p>`).join('');
+            chatbox.scrollTop = chatbox.scrollHeight;
+        }
+
+        function updateUserList() {
+            const userList = document.getElementById('userList');
+            userList.innerHTML = Object.keys(connections).map(user => `<li>${user}</li>`).join('');
+        }
+    </script>
+</body>
+</html>
