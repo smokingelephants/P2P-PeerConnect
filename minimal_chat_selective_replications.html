@@ -43,9 +43,19 @@
     </div>
 
     <script>
-        let peer;
-        let connections = {};
+        //let peer;
+        //let connections = {};
+        //let chats = [];
+        let screen = "login"; // initialize at login screen
+        let usernameInput = localStorage.getItem("username"); // to load saved username
+        let peerError = "";
+        let loading = false;
+        let peer = {}; // initialize as empty object instead of undefined
+        let targetIdInput = "";
+        let peerIds = []; // connected to nobody at first
+        let connections = {}; // maps peerIds to their correspondig PeerJS's DataConnection objects
         let chats = [];
+        let chatMessageInput = "";
 
         function login() {
             const username = document.getElementById('username').value;

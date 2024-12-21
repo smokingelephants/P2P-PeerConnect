@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minimal Multichat</title>
+    <script src="https://unpkg.com/peerjs@1.2.0/dist/peerjs.min.js"></script>
+</head>
+<body>
+    <h1>Multichat</h1>
+
+    <!-- Login Section -->
+    <div id="login">
+        <label for="username">Enter your username:</label>
+        <input id="username" type="text">
+        <button onclick="submitLogin(event)">Login</button>
+        <p id="loginError" style="color: red;"></p>
+    </div>
+
+    <!-- Chat Section -->
+    <div id="chat" style="display: none;">
+        <h2>Welcome, <span id="currentUser"></span></h2>
+
+        <!-- Connection Section -->
+        <div>
+            <label for="targetUsername">Connect to user:</label>
+            <input id="targetUsername" type="text">
+            <button onclick="submitConnection(event)">Connect</button>
+        </div>
+
+        <h3>Connected Users:</h3>
+        <ul id="userList"></ul>
+
+        <!-- Chat Box -->
+        <h3>Chat:</h3>
+        <div id="chatbox" style="border: 1px solid black; height: 200px; overflow-y: scroll; padding: 5px;"></div>
+
+        <!-- Message Input -->
+        <div>
+            <input id="message" type="text" placeholder="Type a message">
+            <button onclick="submitChat(event)">Send</button>
+        </div>
+    </div>
+
+    <script>
+        const appPrefix = "p2p-multichat-test-";
+        //let peer;
+        //let connections = {};
+        //let chats = [];
+        let screen = "login"; // initialize at login screen
+        let usernameInput = localStorage.getItem("username"); // to load saved username
+        let peerError = "";
+        let loading = false;
+        let peer = {}; // initialize as empty object instead of undefined
+        let targetIdInput = "";
+        let peerIds = []; // connected to nobody at first
+        let connections = {}; // maps peerIds to their correspondig PeerJS's DataConnection objects
+        let chats = [];
+        let chatMessageInput = "";
+
+        // util functions to convert username to peer ids and vice-versa
+        function getPeerId(username)  {
+            return appPrefix + username;
+        }
+
+        function getUsername(peerId)  {
+            return peerId ? peerId.slice(appPrefix.length) : "";
+        }
+
+
+        // we keep track of connections ourselves as suggested in peerjs's documentation
+        function addConnection(conn) {
+            connections[conn.peer] = conn;
+            updatePeerIds();
+
+            console.log(`Connected to ${conn.peer}!`);
+        }
+
+        function removeConnection(conn) {
+            delete connections[conn.peer];
+            updatePeerIds();
+        }
+
+        function updatePeerIds() {
+            const userList = document.getElementById('userList');
+            userList.innerHTML = Object.keys(connections).map(user => `<li>${getUsername(user)}</li>`).join('');
+            peerIds = Object.keys(connections);
+        }
+
+        function disconnectPeer() {
+            peer.disconnect();
+        }
+
+        // called to properly configure connection's client listeners
+        function configureConnection(conn) {
+            conn.on("data", data => {
+                // if data is about connections (the list of peers sent when connected)
+                if (data.type === "connections") {
+                    data.peerIds.forEach(peerId => {
+                        if (!connections[peerId]) {
+                            initiateConnection(peerId);
+                        }
+                    });
+                } else if (data.type === "chat") {
+                    receiveChat(data.chat);
+                }
+                // please note here that if data.type is undefined, this endpoint won't do anything!
+            });
+            conn.on("close", () => removeConnection(conn));
+            conn.on("error", () => removeConnection(conn));
+
+            // if the caller joins have a call, we merge calls
+            conn.metadata.peerIds.forEach(peerId => {
+                if (!connections[peerId]) {
+                    initiateConnection(peerId);
+                }
+            });
+        }
+
+        // called to initiate a connection (by the caller)
+        function initiateConnection(peerId) {
+            if (!peerIds.includes(peerId) && peerId !== peer.id) {
+                loading = true;
+                peerError = "";
+
+                console.log(`Connecting to ${peerId}...`);
+
+                const options = {
+                    metadata: {
+                        // if the caller has peers, we send them to merge calls
+                        peerIds: peerIds
+                    },
+                    serialization: "json"
+                };
+                const conn = peer.connect(peerId, options);
+                configureConnection(conn);
+
+                conn.on("open", () => {
+                    addConnection(conn);
+                    if (getUsername(conn.peer) === targetIdInput) {
+                        targetIdInput = "";
+                        loading = false;
+                    }
+                });
+            }
+        }
+
+        function createPeer() {
+            // options are useful in development to connect to local peerjs server
+            peer = new Peer(getPeerId(usernameInput)/*, {
+                host: 'localhost',
+                port: 8080,
+                path: 'app'
+            }*/);
+
+            // when peer is connected to signaling server
+            peer.on("open", () => {
+                screen = "chat"; // changing screen
+                loading = false;
+                peerError = "";
+            });
+            // error listener
+            peer.on("error", error => {
+                if (error.type === "peer-unavailable") { // if connection with new peer can't be established
+                    loading = false;
+                    peerError = `${targetIdInput} is unreachable!`; // custom error message
+                    targetIdInput = "";
+                } else if (error.type === "unavailable-id") { // if requested id (thus username) is already taken
+                    loading = false;
+                    peerError = `${usernameInput} is already taken!`; // custom error message
+                } else peerError = error; // default error message
+            });
+
+            // when peer receives a connection
+            peer.on('connection', conn => {
+                if (!peerIds.includes(conn.peer)) {
+                    configureConnection(conn);
+
+                    conn.on("open", () => {
+                        addConnection(conn);
+
+                        // send every connection previously established to connect everyone (merge chat rooms)
+                        conn.send({
+                            type: "connections",
+                            peerIds: peerIds
+                        });
+                    });
+                }
+            });
+        }
+
+        function submitLogin(event) {
+            if (event) event.preventDefault(); // to prevent default behavior which is to POST to the same page
+
+            usernameInput = document.getElementById('username').value
+            
+            if (usernameInput.length > 0 && !loading) {
+                loading = true; // update status
+                peerError = ""; // reset error status
+
+                localStorage.setItem("username", usernameInput); // set username cookie to instanciate it at the next session
+
+                document.getElementById('loginError').textContent = '';
+                document.getElementById('currentUser').textContent = usernameInput;
+                document.getElementById('login').style.display = 'none';
+                document.getElementById('chat').style.display = 'block';
+
+
+                createPeer();
+            }
+        }
+
+        function submitConnection(event) {
+            event.preventDefault(); // to prevent default behavior which is to POST to the same page
+
+            targetIdInput = document.getElementById('targetUsername').value;
+
+            const peerId = getPeerId(targetIdInput); // the peer's id we want to connect to
+            initiateConnection(peerId);
+        }
+
+        function receiveChat(chat) {
+            chats.push(chat);
+
+            const chatbox = document.getElementById('chatbox');
+            chatbox.innerHTML = chats.map(chat => `<p>${ chat.sender } : ${ chat.message }</p>`).join('');
+            chatbox.scrollTop = chatbox.scrollHeight;
+
+            localStorage.setItem("chats", JSON.stringify(chats));
+        }
+
+        function submitChat(event) {
+            event.preventDefault(); // to prevent default behavior which is to POST to the same page
+
+            chatMessageInput = document.getElementById('message').value;
+
+            if (chatMessageInput.length > 0) {
+                // the chat object's data
+                const chat = {
+                    sender: usernameInput,
+                    message: chatMessageInput,
+                    timestamp: new Date().getTime()
+                };
+
+                receiveChat(chat); // simulate receiving a chat
+                // send chat object to connected users
+                Object.values(connections).forEach(conn => {
+                    conn.send({
+                        type: "chat",
+                        chat
+                    });
+                });
+
+                chatMessageInput = ""; // reset chat message input
+                document.getElementById('message').value = '';
+            }
+        }
+
+        //OLD CODE
+
+        function login() {
+            const username = document.getElementById('username').value;
+            if (!username) {
+                document.getElementById('loginError').textContent = 'Username is required!';
+                return;
+            }
+
+            document.getElementById('loginError').textContent = '';
+            document.getElementById('currentUser').textContent = username;
+            document.getElementById('login').style.display = 'none';
+            document.getElementById('chat').style.display = 'block';
+
+            // Initialize PeerJS
+            peer = new Peer(username);
+
+            peer.on('open', () => console.log('Connected to signaling server'));
+
+            peer.on('connection', conn => {
+                configureConnection_old(conn);
+                conn.on('open', () => {
+                    connections[conn.peer] = conn;
+                    updateUserList();
+                });
+            });
+        }
+
+        function configureConnection_old(conn) {
+            conn.on('data', data => {
+                if (data.type === 'chat') {
+                    chats.push(`${data.sender}: ${data.message}`);
+                    updateChatBox();
+                }
+            });
+
+            conn.on('close', () => {
+                delete connections[conn.peer];
+                updateUserList();
+            });
+        }
+
+        function connectToPeer() {
+            const targetUsername = document.getElementById('targetUsername').value;
+            if (!targetUsername || connections[targetUsername]) return;
+
+            const conn = peer.connect(targetUsername);
+            configureConnection_old(conn);
+            conn.on('open', () => {
+                connections[targetUsername] = conn;
+                updateUserList();
+            });
+        }
+
+        function sendMessage() {
+            const message = document.getElementById('message').value;
+            if (!message) return;
+
+            const sender = peer.id;
+            const chat = { sender, message };
+            chats.push(`${sender}: ${message}`);
+            updateChatBox();
+
+            Object.values(connections).forEach(conn => conn.send({ type: 'chat', sender, message }));
+            document.getElementById('message').value = '';
+        }
+
+        function updateChatBox() {
+            const chatbox = document.getElementById('chatbox');
+            chatbox.innerHTML = chats.map(chat => `<p>${chat}</p>`).join('');
+            chatbox.scrollTop = chatbox.scrollHeight;
+        }
+
+        function updateUserList() {
+            const userList = document.getElementById('userList');
+            userList.innerHTML = Object.keys(connections).map(user => `<li>${user}</li>`).join('');
+        }
+    </script>
+</body>
+</html>
