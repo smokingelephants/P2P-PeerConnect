@@ -261,6 +261,83 @@
             }
         }
 
+        //OLD CODE
+
+        function login() {
+            const username = document.getElementById('username').value;
+            if (!username) {
+                document.getElementById('loginError').textContent = 'Username is required!';
+                return;
+            }
+
+            document.getElementById('loginError').textContent = '';
+            document.getElementById('currentUser').textContent = username;
+            document.getElementById('login').style.display = 'none';
+            document.getElementById('chat').style.display = 'block';
+
+            // Initialize PeerJS
+            peer = new Peer(username);
+
+            peer.on('open', () => console.log('Connected to signaling server'));
+
+            peer.on('connection', conn => {
+                configureConnection_old(conn);
+                conn.on('open', () => {
+                    connections[conn.peer] = conn;
+                    updateUserList();
+                });
+            });
+        }
+
+        function configureConnection_old(conn) {
+            conn.on('data', data => {
+                if (data.type === 'chat') {
+                    chats.push(`${data.sender}: ${data.message}`);
+                    updateChatBox();
+                }
+            });
+
+            conn.on('close', () => {
+                delete connections[conn.peer];
+                updateUserList();
+            });
+        }
+
+        function connectToPeer() {
+            const targetUsername = document.getElementById('targetUsername').value;
+            if (!targetUsername || connections[targetUsername]) return;
+
+            const conn = peer.connect(targetUsername);
+            configureConnection_old(conn);
+            conn.on('open', () => {
+                connections[targetUsername] = conn;
+                updateUserList();
+            });
+        }
+
+        function sendMessage() {
+            const message = document.getElementById('message').value;
+            if (!message) return;
+
+            const sender = peer.id;
+            const chat = { sender, message };
+            chats.push(`${sender}: ${message}`);
+            updateChatBox();
+
+            Object.values(connections).forEach(conn => conn.send({ type: 'chat', sender, message }));
+            document.getElementById('message').value = '';
+        }
+
+        function updateChatBox() {
+            const chatbox = document.getElementById('chatbox');
+            chatbox.innerHTML = chats.map(chat => `<p>${chat}</p>`).join('');
+            chatbox.scrollTop = chatbox.scrollHeight;
+        }
+
+        function updateUserList() {
+            const userList = document.getElementById('userList');
+            userList.innerHTML = Object.keys(connections).map(user => `<li>${user}</li>`).join('');
+        }
     </script>
 </body>
 </html>
