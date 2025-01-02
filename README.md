@@ -1,48 +1,144 @@
-# peerjs-multichat
+```markdown
+# Multichat: Peer-to-Peer Minimal Chat Application
 
-Secure, persistent, almost serverless, one-page real-time chat proof-of-concept, built in under 3 hours using WebRTC, PeerJS, Vue and javascript cookies!
+This project is a minimal, browser-based peer-to-peer chat application built using the [PeerJS library](https://peerjs.com/). It supports multiple users connecting and chatting in real-time, with a basic acknowledgment mechanism for message delivery.
 
-Use this project to securely chat with your friends, in real-time.
+---
 
-## Installation
+## Features
 
-Simply download [index.html](./index.html) and open it with a decent (javascript-enabled) recent browser!
+- **Peer-to-Peer Connections:** Users connect directly using PeerJS.
+- **Dynamic Chat Rooms:** Automatically connects new users to all existing participants.
+- **Message Acknowledgment:** Ensures reliable message delivery using acknowledgments and retries.
+- **Browser-Only Application:** No server backend required, runs entirely in the browser.
+- **User-Friendly Interface:** Easy login, connection, and messaging.
 
-# The challenge
+---
 
-Today's internet infrastructures rely almost every time on data centers, which have a **cost** and an **environmental impact**. To be more specific, [data centers are responsible for approx. 4% of the world's energy consumption](https://data-economy.com/data-centres-world-will-consume-1-5-earths-power-2025/) (and growing). But how would you do your day without your daily binge-watching on demand?
+## Usage
 
-The goal of this project is to simplify and demonstrate the *power, security* and *persistency* of serverless data exchanges. Here is the complete list of features:
-- Basic chat application with usernames
-- Any user must be able to join any other user (in chat rooms)
-- **Security:** data exchanges must be encrypted
-- **Persistency:** data must be saved throught sessions (username, chat)
-- **Serverless:** data must be exchanged between peers without the need of a server
-- **Simplicity:** anyone must be able to use this project without knowledge of anything
+### 1. Clone or Download the Project
+Download the HTML file or clone the repository if hosted on a version control platform.
 
-# The solution
+### 2. Prerequisites
+- A modern browser with JavaScript enabled.
+- Access to the internet for loading the PeerJS library.
 
-I've designed the most simple solution to fulfill the previous requirements, using:
-- [*WebRTC*](https://webrtc.org/), for secure, reliable and serverless data exchanges
-- [*Vue.js*](https://vuejs.org/), for fast & light-weight dynamic rendering & state management
-- [*PeerJS*](https://peerjs.com), for development simplicity over WebRTC
-- [*MaterializeCSS*](https://materializecss.com/), for fast & modern design
-- [*JavaScript localStorage*](https://developer.mozilla.org/en-US/docs/Web/API/Window/localStorage), for data persistency
+### 3. Run the Application
+Open the HTML file in any browser to launch the app.
 
-WebRTC is the Google's open-source base for peer communication in-the-browser, using [QUIC protocol](https://en.wikipedia.org/wiki/QUIC) (the most recent, fast & reliable [transport layer](https://en.wikipedia.org/wiki/Transport_layer) [network protocol](https://en.wikipedia.org/wiki/Network_protocol)). It's supported by almost every decent browser and provides a way to establish data channels between peers supporting any type of data, including real-time audio and video.
+---
 
-PeerJS provides a way to conect the client the a server's endpoint, waiting for peer connections from other clients. Once a connection's established, both peers communicate over WebRTC data channels from which only them can read/write.
+## How It Works
 
-## Why is this solution a great proof of concept?
+### **Login**
+1. Enter your username in the `Login` section.
+2. Click **Login** to join the chat.
+3. Your username is saved in the browser for the session.
 
-The strength of this solution is in its simplicity and security:
-- Any user can log in with a username and join any other friend it knows
-- Any user has a complete access to its chat history
-- Data exchanges are fully encrypted and cannot be interpreted by a man-in-the-middle (see [A Study of WebRTC Security](https://webrtc-security.github.io/) for more information)
+---
 
-## Why is this solution **only** a proof of concept?
+### **Connecting to Other Users**
+1. Enter another user's username in the **Connect to User** input box.
+2. Click **Connect** to establish a peer-to-peer connection.
 
-Many aspects are still to be discussed and thought again:
-- You wouldn't use an application which stores data as javascript cookies!
-- A server is still needed to establish a peer connection (see [WebRTC: the ICE Framework, STUN and TURN Servers](https://levelup.gitconnected.com/webrtc-the-ice-framework-stun-and-turn-servers-10b2972483bb) to learn more about the why). In our case, we use a high-level PeerJS signaling server by default, in comparison with a low-level STUN server (which we could use, with more low-level code)
-- Data exchanged is only read and written by peers, which is why this solution is not suitable for exchanging (for example) gaming data (any user could cheat!)
+The system automatically:
+- Maps usernames to unique PeerJS IDs.
+- Maintains a list of connected users.
+- Broadcasts new connections to all existing peers, ensuring everyone is in the same chat room.
+
+---
+
+### **Messaging**
+1. Type a message in the input box under the **Chat** section.
+2. Click **Send** to broadcast your message to all connected users.
+
+---
+
+### **Message Acknowledgment and Reliability**
+- Each message has a unique SHA-256 hash.
+- Peers send acknowledgment messages (ACK) for received messages.
+- Unacknowledged messages are retried up to 10 times, with a 5-second interval between retries.
+- If retries fail, the connection is re-established, and the message is re-sent.
+
+---
+
+## Code Highlights
+
+### **Peer Management**
+- **Peer ID Conversion:**
+  ```javascript
+  const appPrefix = "p2p-multichat-test-";
+  function getPeerId(username) {
+      return appPrefix + username;
+  }
+  function getUsername(peerId) {
+      return peerId ? peerId.slice(appPrefix.length) : "";
+  }
+  ```
+- **Connection Management:**
+  - Adding/Removing connections:
+    ```javascript
+    function addConnection(conn) {
+        connections[conn.peer] = conn;
+        updatePeerIds();
+    }
+    function removeConnection(conn) {
+        delete connections[conn.peer];
+        updatePeerIds();
+    }
+    ```
+
+### **Message Handling**
+- **Hash Generation for Messages:**
+  ```javascript
+  async function sha256(message) {
+      const msgBuffer = new TextEncoder().encode(message);
+      const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+      return Array.from(new Uint8Array(hashBuffer))
+                  .map(b => b.toString(16).padStart(2, '0'))
+                  .join('');
+  }
+  ```
+
+- **Sending Messages with Retries:**
+  ```javascript
+  const ACK_TIMEOUT = 5000;
+  const MAX_RETRIES = 10;
+
+  const sendWithRetry = (conn, retriesLeft) => {
+      conn.send({ type: "chat", chat });
+      pendingAcks[messageHash] = { /* Retry Logic */ };
+  };
+  ```
+
+- **Receiving Messages:**
+  ```javascript
+  function receiveChat(chat) {
+      chats[chat.hash] = chat;
+      document.getElementById('chatbox').innerHTML = Object.keys(chats)
+          .map(key => `<p>${chat.sender} : ${chat.message}</p>`)
+          .join('');
+  }
+  ```
+
+---
+
+## Limitations
+- Requires manual user connection.
+- No encryption beyond SHA-256 for message acknowledgment.
+- Not suitable for highly scalable use cases.
+
+---
+
+## Future Enhancements
+- Automatic user discovery using signaling servers.
+- Enhanced security with end-to-end encryption.
+- Persistent storage for chat history.
+- Improved UI/UX for better user interaction.
+
+---
+
+## Acknowledgments
+This project uses the [PeerJS](https://peerjs.com/) library for seamless WebRTC integration.
+```
