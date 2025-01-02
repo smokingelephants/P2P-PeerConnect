@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minimal Multichat</title>
+    <script src="https://unpkg.com/peerjs@1.2.0/dist/peerjs.min.js"></script>
+</head>
+<body>
+    <h1>Multichat</h1>
+
+    <!-- Login Section -->
+    <div id="login">
+        <label for="username">Enter your username:</label>
+        <input id="username" type="text">
+        <button onclick="submitLogin(event)">Login</button>
+        <p id="loginError" style="color: red;"></p>
+    </div>
+
+    <!-- Chat Section -->
+    <div id="chat" style="display: none;">
+        <h2>Welcome, <span id="currentUser"></span></h2>
+
+        <!-- Connection Section -->
+        <div>
+            <label for="targetUsername">Connect to user:</label>
+            <input id="targetUsername" type="text">
+            <button onclick="submitConnection(event)">Connect</button>
+        </div>
+
+        <h3>Connected Users:</h3>
+        <ul id="userList"></ul>
+
+        <!-- Chat Box -->
+        <h3>Chat:</h3>
+        <div id="chatbox" style="border: 1px solid black; height: 200px; overflow-y: scroll; padding: 5px;"></div>
+
+        <!-- Message Input -->
+        <div>
+            <input id="message" type="text" placeholder="Type a message">
+            <button onclick="submitChat(event)">Send</button>
+        </div>
+    </div>
+
+    <script>
+        const appPrefix = "p2p-multichat-test-";
+        const ACK_TIMEOUT = 5000; // Timeout for acknowledgment in ms
+        const MAX_RETRIES = 3; // Maximum retries for sending messages
+        const RETRY_BACKOFF = 10000; // 2000 Initial backoff interval for retries
+        const RATE_LIMIT = 500; // Minimum interval between messages
+
+        let peer;
+        let connections = {};
+        let pendingAcks = {}; // Pending acknowledgments
+        let usernameInput = localStorage.getItem("username");
+        let chatMessageInput = "";
+        let chats = {};
+        let connectionLock = false;
+        let lastSentTime = 0; // Timestamp of the last sent message
+
+        function getPeerId(username) {
+            return appPrefix + username;
+        }
+
+        function getUsername(peerId) {
+            return peerId ? peerId.slice(appPrefix.length) : "";
+        }
+
+        function addConnection(conn) {
+            connections[conn.peer] = conn;
+            updatePeerIds();
+            console.log(`Connected to ${conn.peer}!`);
+        }
+
+        function removeConnection(conn) {
+            if (connections[conn.peer]) {
+                conn.close();
+                delete connections[conn.peer];
+                updatePeerIds();
+            }
+        }
+
+        function updatePeerIds() {
+            const userList = document.getElementById('userList');
+            userList.innerHTML = Object.keys(connections).map(user => `<li>${getUsername(user)}</li>`).join('');
+        }
+
+        function configureConnection(conn) {
+            conn.on("data", data => {
+                if (data.type === "connections") {
+                    data.peerIds.forEach(peerId => {
+                        if (!connections[peerId]) {
+                            initiateConnection(peerId);
+                        }
+                    });
+                } else if (data.type === "chat") {
+                    receiveChat(data.chat);
+
+                    // Send acknowledgment back
+                    conn.send({
+                        type: "ack",
+                        hash: data.chat.hash
+                    });
+                } else if (data.type === "ack") {
+                    if (pendingAcks[data.hash]) {
+                        clearTimeout(pendingAcks[data.hash].timeout);
+                        delete pendingAcks[data.hash];
+                    }
+                }
+            });
+
+            conn.on("close", () => removeConnection(conn));
+            conn.on("error", () => removeConnection(conn));
+        }
+
+        function initiateConnection(peerId) {
+            if (connectionLock || (connections[peerId] && connections[peerId].open)) return;
+            connectionLock = true;
+            console.log(`Connecting to ${peerId}...`);
+
+            const conn = peer.connect(peerId, { serialization: "json" });
+            configureConnection(conn);
+
+            conn.on("open", () => {
+                addConnection(conn);
+                conn.send({
+                    type: "connections",
+                    peerIds: Object.keys(connections)
+                });
+                connectionLock = false;
+            });
+
+            setTimeout(() => (connectionLock = false), 1000); // Release lock after 1 second
+        }
+
+        function createPeer() {
+            peer = new Peer(getPeerId(usernameInput));
+
+            peer.on("open", () => {
+                document.getElementById('login').style.display = 'none';
+                document.getElementById('chat').style.display = 'block';
+                document.getElementById('currentUser').textContent = usernameInput;
+            });
+
+            // peer.on("connection", conn => {
+            //     configureConnection(conn);
+            //     conn.on("open", () => addConnection(conn));
+            // });
+
+                        // when peer receives a connection
+            peer.on('connection', conn => {
+                peerIds = Object.keys(connections)
+                if (!peerIds.includes(conn.peer)) {
+                    configureConnection(conn);
+
+                    conn.on("open", () => {
+                        console.log(`!!Connecting here [createpeer open] to ...${conn.peer}`);
+                        addConnection(conn);
+
+                        // send every connection previously established to connect everyone (merge chat rooms)
+                        conn.send({
+                            type: "connections",
+                            peerIds: peerIds
+                        });
+                    });
+                }
+            });
+
+            peer.on("error", error => {
+                console.error(`PeerJS Error: ${error.type}`);
+            });
+        }
+
+        async function sha256(message) {
+            const msgBuffer = new TextEncoder().encode(message);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        // function receiveChat(chat) {
+        //     const chatbox = document.getElementById('chatbox');
+        //     const chatHtml = `<p>${chat.sender}: ${chat.message} #${chat.hash}</p>`;
+        //     chatbox.innerHTML += chatHtml;
+        //     chatbox.scrollTop = chatbox.scrollHeight;
+        // }
+
+        function receiveChat(chat) {
+            //chats.push(chat);
+            //console.log(`received chat with hash... ${chat.hash}`);
+            chats[chat.hash] = chat;
+
+            // if(!chats[chat.hash]){
+            //     chats[chat.hash] = chat;
+            // }
+
+            const chatbox = document.getElementById('chatbox');
+            //chatbox.innerHTML = chats.map(chat => `<p>${ chat.sender } : ${ chat.message } # ${ chat.hash }</p>`).join('');
+            //Object.keys( d ).map( function(key){ return key+"="+d[key] }).join("&") //outputs "foo=0&bar=1"
+            chatbox.innerHTML = Object.keys(chats).map(function(key){
+                chat = chats[key];
+                return `<p>${ chat.sender } : ${ chat.message } # ${ chat.hash }</p>`;
+            }).join('');
+                    
+            chatbox.scrollTop = chatbox.scrollHeight;
+
+            //localStorage.setItem("chats", JSON.stringify(chats));
+        }
+
+        function submitLogin(event) {
+            event.preventDefault();
+            usernameInput = document.getElementById('username').value;
+            if (usernameInput.length > 0) {
+                localStorage.setItem("username", usernameInput);
+                createPeer();
+            }
+        }
+
+        function submitConnection(event) {
+            event.preventDefault();
+            const targetIdInput = document.getElementById('targetUsername').value;
+            const peerId = getPeerId(targetIdInput);
+            initiateConnection(peerId);
+        }
+
+        function canSendMessage() {
+            const now = Date.now();
+            if (now - lastSentTime > RATE_LIMIT) {
+                lastSentTime = now;
+                return true;
+            }
+            return false;
+        }
+
+        async function submitChat(event) {
+            event.preventDefault();
+            if (!canSendMessage()) {
+                console.warn("Rate limit exceeded. Wait before sending another message.");
+                return;
+            }
+
+            chatMessageInput = document.getElementById('message').value;
+
+            if (chatMessageInput.length > 0) {
+                const chatTime = new Date().getTime();
+                const fullMessage = `${usernameInput}:${chatMessageInput}:${chatTime}`;
+                const messageHash = await sha256(fullMessage);
+
+                const chat = {
+                    sender: usernameInput,
+                    message: chatMessageInput,
+                    timestamp: chatTime,
+                    hash: messageHash
+                };
+
+                receiveChat(chat);
+
+                const sendWithRetry = (conn, retriesLeft, retryInterval) => {
+                    console.log(`Sending chat to ${conn.peer}, retries left: ${retriesLeft}`);
+
+                    conn.send({
+                        type: "chat",
+                        chat
+                    });
+
+                    pendingAcks[messageHash] = {
+                        chat,
+                        conn,
+                        retriesLeft,
+                        timeout: setTimeout(() => {
+                            if (retriesLeft > 0) {
+                                console.log(`Retrying for hash: ${messageHash}`);
+                                sendWithRetry(conn, retriesLeft - 1, retryInterval * 2);
+                            } else {
+                                console.error(`Message dropped after max retries: ${messageHash}`);
+                                delete pendingAcks[messageHash];
+                            }
+                        }, retryInterval)
+                    };
+                };
+
+                Object.values(connections).forEach(conn => {
+                    sendWithRetry(conn, MAX_RETRIES, RETRY_BACKOFF);
+                });
+
+                chatMessageInput = "";
+                document.getElementById('message').value = '';
+            }
+        }
+
+    </script>
+</body>
+</html>

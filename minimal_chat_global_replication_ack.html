@@ -93,8 +93,52 @@
             peer.disconnect();
         }
 
-        // called to properly configure connection's client listeners
+
+
+        // At the top of the script, define constants for the acknowledgment timeout
+        const ACK_TIMEOUT = 5000; // Timeout in milliseconds (5 seconds)
+
+        // Updated `configureConnection` function for acknowledgment
         function configureConnection(conn) {
+            conn.on("data", async data => {
+                if (data.type === "connections") {
+                    data.peerIds.forEach(peerId => {
+                        if (!connections[peerId]) {
+                            initiateConnection(peerId);
+                        }
+                    });
+                } else if (data.type === "chat") {
+                    receiveChat(data.chat);
+                    
+                    // Send acknowledgment (chat hash) back to sender
+                    console.log(`Sending ACK to: ${conn.peer}`);
+                    conn.send({
+                        type: "ack",
+                        hash: data.chat.hash,
+                    });
+                } else if (data.type === "ack") {
+                    // Handle acknowledgment received for a specific message hash
+                    console.log(`Acknowledgment received for hash: ${data.hash}`);
+                    if (pendingAcks[data.hash]) {
+                        clearTimeout(pendingAcks[data.hash].timeout);
+                        delete pendingAcks[data.hash];
+                    }
+                }
+            });
+
+            conn.on("close", () => removeConnection(conn));
+            conn.on("error", () => removeConnection(conn));
+
+            conn.metadata.peerIds.forEach(peerId => {
+                if (!connections[peerId]) {
+                    initiateConnection(peerId);
+                }
+            });
+        }
+
+
+        // called to properly configure connection's client listeners
+        /*function configureConnection(conn) {
             conn.on("data", data => {
                 // if data is about connections (the list of peers sent when connected)
                 console.log(`!!received ${data.type}...`);
@@ -111,6 +155,7 @@
                     });
                 } else if (data.type === "chat") {
                     receiveChat(data.chat);
+                    //send ACK as HASH
                 }
                 // please note here that if data.type is undefined, this endpoint won't do anything!
             });
@@ -124,7 +169,7 @@
                     initiateConnection(peerId);
                 }
             });
-        }
+        }*/
 
         // called to initiate a connection (by the caller)
         function initiateConnection(peerId) {
@@ -278,7 +323,132 @@
             //localStorage.setItem("chats", JSON.stringify(chats));
         }
 
+
+
+
+
+        // Object to keep track of pending acknowledgments
+        let pendingAcks = {};
+
+        // Updated `submitChat` function with acknowledgment handling
+        
         async function submitChat(event) {
+            event.preventDefault();
+            chatMessageInput = document.getElementById('message').value;
+
+            if (chatMessageInput.length > 0) {
+                const MAX_RETRIES = 10; // Number of retries before giving up
+
+                let chatTime = new Date().getTime();
+                let fullMessage = usernameInput + ':' + chatMessageInput + ':' + chatTime;
+                const messageHash = await sha256(fullMessage);
+
+                const chat = {
+                    sender: usernameInput,
+                    message: chatMessageInput,
+                    timestamp: chatTime,
+                    hash: messageHash
+                };
+
+                receiveChat(chat); // Simulate receiving a chat locally
+
+                // Function to handle retry logic
+                const sendWithRetry = (conn, retriesLeft) => {
+                    console.log(`Sending chat to ${conn.peer} with ${retriesLeft} retries left...`);
+
+                    conn.send({
+                        type: "chat",
+                        chat
+                    });
+
+                    pendingAcks[messageHash] = {
+                        chat,
+                        conn,
+                        retriesLeft,
+                        timeout: setTimeout(() => {
+                            if (retriesLeft > 0) {
+                                console.log(`Retrying for hash: ${messageHash}. Retries left: ${retriesLeft - 1}`);
+
+                                // Close the existing connection and reinitiate
+                                const peerId = conn.peer;
+                                removeConnection(conn);
+                                initiateConnection(peerId);
+
+                                // Retry sending the chat
+                                sendWithRetry(peer.connections[peerId][0], retriesLeft - 1);
+                            } else {
+                                console.log(`Failed to send message after ${MAX_RETRIES} attempts: ${messageHash}`);
+                                delete pendingAcks[messageHash]; // Clean up if retries are exhausted
+                            }
+                        }, ACK_TIMEOUT)
+                    };
+                };
+
+                // Send chat to all connected users with retry logic
+                Object.values(connections).forEach(conn => {
+                    sendWithRetry(conn, MAX_RETRIES);
+                });
+
+                chatMessageInput = ""; // Reset input field
+                document.getElementById('message').value = '';
+                console.log(`Message SENT TO ALL `);
+
+            }
+        }
+
+        /*async function submitChat(event) {
+            event.preventDefault();
+            chatMessageInput = document.getElementById('message').value;
+
+            if (chatMessageInput.length > 0) {
+                let chatTime = new Date().getTime();
+                let fullMessage = usernameInput + ':' + chatMessageInput + ':' + chatTime;
+                const messageHash = await sha256(fullMessage);
+
+                const chat = {
+                    sender: usernameInput,
+                    message: chatMessageInput,
+                    timestamp: chatTime,
+                    hash: messageHash
+                };
+
+                receiveChat(chat); // Simulate receiving a chat locally
+
+                // Send chat to all connected users
+                Object.values(connections).forEach(conn => {
+                    console.log(`Sending chat to... ${conn.peer}`);
+                    conn.send({
+                        type: "chat",
+                        chat
+                    });
+
+                    // Set up acknowledgment handling
+                    pendingAcks[messageHash] = {
+                        chat,
+                        conn,
+                        timeout: setTimeout(() => {
+                            console.log(`Acknowledgment not received for hash: ${messageHash}. Retrying...`);
+                            
+                            // Reinitiate connection and resend chat
+                            const peerId = conn.peer;
+                            removeConnection(conn); // Close existing connection
+                            initiateConnection(peerId); // Reconnect
+                            conn.send({
+                                type: "chat",
+                                chat
+                            });
+                        }, ACK_TIMEOUT),
+                    };
+                });
+
+                chatMessageInput = ""; // Reset input field
+                document.getElementById('message').value = '';
+            }
+        }*/
+
+
+
+        /*async function submitChat(event) {
             event.preventDefault(); // to prevent default behavior which is to POST to the same page
 
             chatMessageInput = document.getElementById('message').value;
@@ -328,6 +498,12 @@
                         type: "chat",
                         chat
                     });
+                    //receive ACK 
+                    //if no ACK in n seconds
+                        //close peer connection
+                        //initiate new connection
+                        //send chat again
+                    //else move on to next
                 });
 
                 chatMessageInput = ""; // reset chat message input
@@ -335,7 +511,7 @@
 
             }
         
-        }
+        }*/
 
     </script>
 </body>
