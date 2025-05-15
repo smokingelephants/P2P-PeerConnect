@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Minimal Multichat</title>
+    <title>Minimal Multichat EC2</title>
     <script src="https://unpkg.com/peerjs@1.2.0/dist/peerjs.min.js"></script>
 </head>
 <body>
@@ -149,9 +149,9 @@
 
         function createPeer() {
             //peer = new Peer(getPeerId(usernameInput));
-            peer = new Peer(getPeerId(usernameInput));
+            //peer = new Peer(getPeerId(usernameInput));
 
-            const peer = new Peer(getPeerId(usernameInput), {
+            peer = new Peer(getPeerId(usernameInput), {
         		host: "ec2-54-210-158-220.compute-1.amazonaws.com",
         		port: 9000,
         		path: "/myapp",
