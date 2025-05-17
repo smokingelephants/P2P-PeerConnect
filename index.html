@@ -152,9 +152,10 @@
             //peer = new Peer(getPeerId(usernameInput));
 
             peer = new Peer(getPeerId(usernameInput), {
-        		host: "ec2-52-91-5-95.compute-1.amazonaws.com",
+        		host: 'ec2-52-91-5-95.compute-1.amazonaws.com',
         		port: 9000,
-        		path: "/myapp",
+        		path: '/myapp',
+                key: 'peerjs',
         	});
 
             peer.on("open", () => {
